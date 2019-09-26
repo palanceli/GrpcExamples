@@ -23,9 +23,10 @@ package main
 
 import (
 	"context"
-	"log"
+	"flag"
 	"net"
 
+	"github.com/golang/glog"
 	"google.golang.org/grpc"
 	pb "google.golang.org/grpc/examples/helloworld/helloworld"
 )
@@ -39,18 +40,30 @@ type server struct{}
 
 // SayHello implements helloworld.GreeterServer
 func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
-	log.Printf("Received: %v", in.GetName())
+	glog.V(8).Infof("Received: %v", in.GetName())
 	return &pb.HelloReply{Message: "Hello " + in.GetName()}, nil
 }
 
 func main() {
+	flag.Set("logtostderr", "true")
+	flag.Set("v", "10") // 输出10以下的log
+	flag.Parse()
+	defer glog.Flush()
+
+	// 第一步：指定监听端口
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		glog.Fatalf("failed to listen: %v", err)
 	}
+
+	// 第二步：创建GRPC Server实例
 	s := grpc.NewServer()
+
+	// 第三步：向GRPC Server注册服务实现
 	pb.RegisterGreeterServer(s, &server{})
+
+	// 第四步：启动服务
 	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		glog.Fatalf("failed to serve: %v", err)
 	}
 }
