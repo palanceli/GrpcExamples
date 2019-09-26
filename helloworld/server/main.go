@@ -27,6 +27,7 @@ import (
 	"net"
 
 	"github.com/golang/glog"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"google.golang.org/grpc"
 	pb "google.golang.org/grpc/examples/helloworld/helloworld"
 )
@@ -44,6 +45,16 @@ func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloRe
 	return &pb.HelloReply{Message: "Hello " + in.GetName()}, nil
 }
 
+// LoggingInterceptor 实现unary拦截器
+func LoggingInterceptor(ctx context.Context, req interface{},
+	info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (
+	interface{}, error) {
+	glog.V(8).Infof("request: %s, %v", info.FullMethod, req)
+	resp, err := handler(ctx, req)
+	glog.V(8).Infof("response: %s, %v", info.FullMethod, resp)
+	return resp, err
+}
+
 // 启动服务端
 // $ go run main.go
 func main() {
@@ -52,19 +63,19 @@ func main() {
 	flag.Parse()
 	defer glog.Flush()
 
-	// 第一步：指定监听端口
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
 		glog.Fatalf("failed to listen: %v", err)
 	}
 
-	// 第二步：创建GRPC Server实例
-	s := grpc.NewServer()
+	opts := []grpc.ServerOption{
+		grpc_middleware.WithUnaryServerChain(LoggingInterceptor),
+	}
 
-	// 第三步：向GRPC Server注册服务实现
+	s := grpc.NewServer(opts...) // 使用单向拦截器
+
 	pb.RegisterGreeterServer(s, &server{})
 
-	// 第四步：启动服务
 	if err := s.Serve(lis); err != nil {
 		glog.Fatalf("failed to serve: %v", err)
 	}
