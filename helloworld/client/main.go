@@ -35,7 +35,8 @@ const (
 	defaultName = "world"
 )
 
-// go run main.go
+// 启动客户端
+// $ go run main.go
 func main() {
 	flag.Set("logtostderr", "true")
 	flag.Set("v", "10") // 输出10以下的log

@@ -44,6 +44,8 @@ func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloRe
 	return &pb.HelloReply{Message: "Hello " + in.GetName()}, nil
 }
 
+// 启动服务端
+// $ go run main.go
 func main() {
 	flag.Set("logtostderr", "true")
 	flag.Set("v", "10") // 输出10以下的log
