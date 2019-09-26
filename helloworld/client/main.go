@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"google.golang.org/grpc"
 	pb "google.golang.org/grpc/examples/helloworld/helloworld"
 )
@@ -35,6 +36,15 @@ const (
 	defaultName = "world"
 )
 
+// LoggingInterceptor 实现unary拦截器
+func LoggingInterceptor(ctx context.Context, method string, req interface{},
+	reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker,
+	opts ...grpc.CallOption) error {
+	err := invoker(ctx, method, req, reply, cc, opts...)
+	glog.V(8).Infof("invoked gRPC: %s, %v", method, err)
+	return err
+}
+
 // 启动客户端
 // $ go run main.go
 func main() {
@@ -43,18 +53,16 @@ func main() {
 	flag.Parse()
 	defer glog.Flush()
 
-	// 第一步：创建连接GRPC Server的信道
-	// 还可以调用DialOptions设置认证信息再传入Dial
-	conn, err := grpc.Dial(address, grpc.WithInsecure())
+	conn, err := grpc.Dial(address,
+		grpc.WithInsecure(),
+		grpc.WithUnaryInterceptor(grpc_middleware.ChainUnaryClient(LoggingInterceptor)))
 	if err != nil {
 		glog.Fatalf("did not connect: %v", err)
 	}
 	defer conn.Close()
 
-	// 第二步：创建GRPC调用的客户端
 	c := pb.NewGreeterClient(conn)
 
-	// 第三步：通过GRPC客户端调用服务接口
 	name := defaultName
 	if len(os.Args) > 1 {
 		name = os.Args[1]

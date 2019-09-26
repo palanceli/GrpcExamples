@@ -25,25 +25,76 @@ import (
 	"context"
 	"flag"
 	"net"
+	"net/http"
 
 	"github.com/golang/glog"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	pb "google.golang.org/grpc/examples/helloworld/helloworld"
 )
 
+// ================================
+// Prometheus 支持
+
+// PrometheusServer 封装prometheus服务
+type PrometheusServer struct {
+	Registry                *prometheus.Registry
+	GrpcMetrics             *grpc_prometheus.ServerMetrics
+	CustomizedCounterMetric *prometheus.CounterVec
+}
+
+// CreatePrometheusServer 工厂方法
+func CreatePrometheusServer(grpcServer *grpc.Server) (obj *PrometheusServer) {
+	registry := prometheus.NewRegistry()
+	grpcMetrics := grpc_prometheus.NewServerMetrics()
+	grpcMetrics.InitializeMetrics(grpcServer)
+	customizedCounterMetric := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "demo_server_say_hello_method_handle_count",
+			Help: "Total number of RPCs handled on the server.",
+		}, []string{"name"})
+
+	registry.MustRegister(grpcMetrics, customizedCounterMetric)
+	return &PrometheusServer{
+		Registry:                registry,
+		GrpcMetrics:             grpcMetrics,
+		CustomizedCounterMetric: customizedCounterMetric,
+	}
+}
+
+// Run .
+func (s *PrometheusServer) Run() {
+	// 创建prometheus的HTTP server
+	httpServer := &http.Server{
+		Handler: promhttp.HandlerFor(s.Registry, promhttp.HandlerOpts{}),
+		Addr:    "0.0.0.0:50052",
+	}
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil {
+			glog.Fatalf("Unable to start a http server. err=%v", err)
+		}
+	}()
+}
+
+// ================================
+
+// ================================
+// gRPC 服务实现
 const (
 	port = ":50051"
 )
 
-// server is used to implement helloworld.GreeterServer.
 type server struct{}
 
-// SayHello implements helloworld.GreeterServer
 func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
 	glog.V(8).Infof("Received: %v", in.GetName())
 	return &pb.HelloReply{Message: "Hello " + in.GetName()}, nil
 }
+
+// ================================
 
 // LoggingInterceptor 实现unary拦截器
 func LoggingInterceptor(ctx context.Context, req interface{},
@@ -69,12 +120,19 @@ func main() {
 	}
 
 	opts := []grpc.ServerOption{
-		grpc_middleware.WithUnaryServerChain(LoggingInterceptor),
+		grpc_middleware.WithUnaryServerChain(
+			LoggingInterceptor,
+			grpc_prometheus.UnaryServerInterceptor,
+		),
 	}
 
-	s := grpc.NewServer(opts...) // 使用单向拦截器
+	s := grpc.NewServer(opts...)
 
 	pb.RegisterGreeterServer(s, &server{})
+
+	glog.V(8).Infof("Starting prometheus server ...")
+	prometheusServer := CreatePrometheusServer(s)
+	prometheusServer.Run()
 
 	if err := s.Serve(lis); err != nil {
 		glog.Fatalf("failed to serve: %v", err)
