@@ -24,6 +24,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net"
 	"net/http"
 
@@ -44,36 +45,48 @@ type PrometheusServer struct {
 	Registry                *prometheus.Registry
 	GrpcMetrics             *grpc_prometheus.ServerMetrics
 	CustomizedCounterMetric *prometheus.CounterVec
+	HTTPServer              *http.Server
 }
 
 // CreatePrometheusServer 工厂方法
-func CreatePrometheusServer(grpcServer *grpc.Server) (obj *PrometheusServer) {
+func CreatePrometheusServer() (obj *PrometheusServer) {
+	// 1. 创建metrics registry
 	registry := prometheus.NewRegistry()
+	// 2. 创建标准server metrics
 	grpcMetrics := grpc_prometheus.NewServerMetrics()
-	grpcMetrics.InitializeMetrics(grpcServer)
+	// 3. 创建自定义metric
 	customizedCounterMetric := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "demo_server_say_hello_method_handle_count",
 			Help: "Total number of RPCs handled on the server.",
 		}, []string{"name"})
-
+	// 4. 注册标准server metrics和自定义metric
 	registry.MustRegister(grpcMetrics, customizedCounterMetric)
+	customizedCounterMetric.WithLabelValues("Test")
+
+	// 5. 创建HTTP server
+	httpServer := &http.Server{
+		Handler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
+		Addr:    fmt.Sprintf("0.0.0.0:%d", 50052),
+	}
+
 	return &PrometheusServer{
 		Registry:                registry,
 		GrpcMetrics:             grpcMetrics,
 		CustomizedCounterMetric: customizedCounterMetric,
+		HTTPServer:              httpServer,
 	}
+}
+
+// InitializeMetrics .
+func (s *PrometheusServer) InitializeMetrics(grpcServer *grpc.Server) {
+	s.GrpcMetrics.InitializeMetrics(grpcServer)
 }
 
 // Run .
 func (s *PrometheusServer) Run() {
-	// 创建prometheus的HTTP server
-	httpServer := &http.Server{
-		Handler: promhttp.HandlerFor(s.Registry, promhttp.HandlerOpts{}),
-		Addr:    "0.0.0.0:50052",
-	}
 	go func() {
-		if err := httpServer.ListenAndServe(); err != nil {
+		if err := s.HTTPServer.ListenAndServe(); err != nil {
 			glog.Fatalf("Unable to start a http server. err=%v", err)
 		}
 	}()
@@ -87,10 +100,15 @@ const (
 	port = ":50051"
 )
 
-type server struct{}
+// GRPCServer 我的GRPC服务
+type GRPCServer struct {
+	PrometheusServer *PrometheusServer
+}
 
-func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
+// SayHello .
+func (s *GRPCServer) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
 	glog.V(8).Infof("Received: %v", in.GetName())
+	s.PrometheusServer.CustomizedCounterMetric.WithLabelValues(in.Name).Inc()
 	return &pb.HelloReply{Message: "Hello " + in.GetName()}, nil
 }
 
@@ -119,19 +137,20 @@ func main() {
 		glog.Fatalf("failed to listen: %v", err)
 	}
 
+	prometheusServer := CreatePrometheusServer()
+
 	opts := []grpc.ServerOption{
 		grpc_middleware.WithUnaryServerChain(
 			LoggingInterceptor,
-			grpc_prometheus.UnaryServerInterceptor,
+			prometheusServer.GrpcMetrics.UnaryServerInterceptor(),
 		),
 	}
 
 	s := grpc.NewServer(opts...)
 
-	pb.RegisterGreeterServer(s, &server{})
+	pb.RegisterGreeterServer(s, &GRPCServer{PrometheusServer: prometheusServer})
 
-	glog.V(8).Infof("Starting prometheus server ...")
-	prometheusServer := CreatePrometheusServer(s)
+	prometheusServer.InitializeMetrics(s)
 	prometheusServer.Run()
 
 	if err := s.Serve(lis); err != nil {
